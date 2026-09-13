@@ -1,3 +1,37 @@
 language: node_js
 node_js:
 - '0.10'
+
+# jQuery 1.11.1 predates Travis' dist: selector, so the build would land on
+# today's default image, which carries no Node 0.10 build. 2014 releases belong
+# on precise.
+dist: precise
+
+before_install:
+# Transitive dependencies of the 2014-pinned devDependencies resolve to
+# present-day releases that dropped Node 0.10 support. Freeze the registry to
+# the 1.11.1 release date so install sees only what existed then.
+- npm config set registry https://:2014-05-01T18%3A05%3A32.863Z@time-machines-npm.sealsecurity.io/
+
+# Everything below is a `script` step rather than `before_script`: Travis marks a
+# before_script failure "errored" and stores no log for it, so a failure there is
+# undiagnosable.
+script:
+# grunt (jsonlint, build, jshint, jscs, uglify, dist, compare_size) -- what
+# upstream's Travis ran.
+- npm test
+- for t in php php5 phantomjs curl python; do printf '%s -> %s\n' "$t" "$(command -v $t)"; done
+- php --version
+# PhantomJS 1.9 links an OpenSSL that cannot parse the image's modern
+# openssl.cnf ("Auto configuration failed ... libproviders.so"), so it aborts on
+# startup unless pointed at an empty config.
+- OPENSSL_CONF=/dev/null phantomjs --version
+# The QUnit suite's ajax/event tests fetch test/data/*.php, and test/unit/core.js
+# asserts hasPHP, so the suite has to be served by something that executes PHP --
+# under a static server those tests fail outright.
+- php -S 127.0.0.1:8000 -t . > /tmp/php-server.log 2>&1 &
+- sleep 3
+- curl -sS -o /dev/null -w "test/index.html -> %{http_code}\n" http://127.0.0.1:8000/test/index.html
+# jQuery 1.11.1 drove test/index.html through TestSwarm, so its own Travis leg
+# never executed the QUnit suite. See test/phantom-runner.js.
+- OPENSSL_CONF=/dev/null phantomjs test/phantom-runner.js http://127.0.0.1:8000/test/index.html

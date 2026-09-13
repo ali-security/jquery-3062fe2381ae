@@ -1,0 +1,106 @@
+name: pack
+
+# Build-and-pack only. jQuery 1.11.1 predates GitHub Actions and ships no
+# workflow of its own; the project's CI legs live in .travis.yml and run there.
+on:
+  workflow_dispatch:
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate dist/cdn release copies
+        # The published tarball carries dist/cdn/*, which the upstream release
+        # manager produced by running build/release.js. That script is an
+        # interactive, git-pushing release driver (jquery-release) and cannot run
+        # in CI, so this reproduces only its makeReleaseCopies() step, verbatim,
+        # taking the version from package.json instead of the release prompt.
+        run: |
+          cat > /tmp/release-copies.js <<'RELEASE_COPIES'
+          var fs = require( "fs" ),
+            path = require( "path" ),
+
+            root = process.cwd(),
+            version = JSON.parse(
+              fs.readFileSync( path.join( root, "package.json" ), "utf8" )
+            ).version,
+
+            devFile = "dist/jquery.js",
+            minFile = "dist/jquery.min.js",
+            mapFile = "dist/jquery.min.map",
+
+            cdnFolder = "dist/cdn",
+
+            releaseFiles = {
+              "jquery-VER.js": devFile,
+              "jquery-VER.min.js": minFile,
+              "jquery-VER.min.map": mapFile,
+              "jquery.js": devFile,
+              "jquery.min.js": minFile,
+              "jquery.min.map": mapFile,
+              "jquery-latest.js": devFile,
+              "jquery-latest.min.js": minFile,
+              "jquery-latest.min.map": mapFile
+            };
+
+          if ( !fs.existsSync( path.join( root, cdnFolder ) ) ) {
+            fs.mkdirSync( path.join( root, cdnFolder ) );
+          }
+
+          Object.keys( releaseFiles ).forEach(function( key ) {
+            var text,
+              builtFile = path.join( root, releaseFiles[ key ] ),
+              unpathedFile = key.replace( /VER/g, version ),
+              releaseFile = path.join( root, cdnFolder, unpathedFile );
+
+            if ( /\.map$/.test( releaseFile ) ) {
+
+              // Map files need to reference the new uncompressed name;
+              // assume that all files reside in the same directory.
+              // "file":"jquery.min.js","sources":["jquery.js"]
+              text = fs.readFileSync( builtFile, "utf8" )
+                .replace( /"file":"([^"]+)","sources":\["([^"]+)"\]/,
+                  "\"file\":\"" + unpathedFile.replace( /\.min\.map/, ".min.js" ) +
+                  "\",\"sources\":[\"" + unpathedFile.replace( /\.min\.map/, ".js" ) + "\"]" );
+              fs.writeFileSync( releaseFile, text );
+            } else if ( /\.min\.js$/.test( releaseFile ) ) {
+
+              // Remove the source map comment; it causes way too many problems.
+              // Keep the map file in case DevTools allow manual association.
+              text = fs.readFileSync( builtFile, "utf8" )
+                .replace( /\/\/# sourceMappingURL=\S+/, "" );
+              fs.writeFileSync( releaseFile, text );
+            } else if ( builtFile !== releaseFile ) {
+              fs.writeFileSync( releaseFile, fs.readFileSync( builtFile ) );
+            }
+
+            console.log( "File '" + cdnFolder + "/" + unpathedFile + "' created." );
+          });
+          RELEASE_COPIES
+          node /tmp/release-copies.js
+
+      - name: Pack on Node 0.10
+        # jquery-1.11.1.tgz was published from Node 0.10, whose npm decides the
+        # tarball member set; no Node 0.10 runs natively on ubuntu-latest, so
+        # pack inside the era's official image. dist/ is committed at the 1.11.1
+        # tag and is what was published -- it is packed as-is rather than
+        # rebuilt, because grunt's uglify banner stamps the current year
+        # (grunt.template.today('yyyy')) and would write 2026 where the released
+        # file says 2014.
+        run: |
+          # jQuery 1.11.1 predates GitHub Actions, so .npmignore has no /.github
+          # entry and npm would pack this workflow into the tarball. Drop the
+          # directory rather than add the entry, because .npmignore itself ships
+          # as a tarball member and must stay byte-identical to the published one.
+          rm -rf .github
+          docker run --rm -v "$PWD":/src -w /src node:0.10-wheezy npm pack
+          ls -l jquery-*.tgz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-tarball
+          path: jquery-1.11.1.tgz
+          if-no-files-found: error
