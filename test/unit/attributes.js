@@ -477,7 +477,9 @@ test( "attr(String, Object)", function() {
 test( "attr - extending the boolean attrHandle", function() {
 	expect( 1 );
 	var called = false,
-		_handle = jQuery.expr.attrHandle.checked || $.noop;
+		origAttrHandleHadChecked = "checked" in jQuery.expr.attrHandle,
+		origAttrHandleChecked = jQuery.expr.attrHandle.checked,
+		_handle = origAttrHandleChecked || $.noop;
 	jQuery.expr.attrHandle.checked = function() {
 		called = true;
 		_handle.apply( this, arguments );
@@ -486,6 +488,12 @@ test( "attr - extending the boolean attrHandle", function() {
 	called = false;
 	jQuery( "input" ).attr( "checked" );
 	ok( called, "The boolean attrHandle does not drop custom attrHandles" );
+
+	if ( origAttrHandleHadChecked ) {
+		jQuery.expr.attrHandle.checked = origAttrHandleChecked;
+	} else {
+		delete jQuery.expr.attrHandle.checked;
+	}
 });
 
 test( "attr(String, Object) - Loaded via XML document", function() {
@@ -1475,4 +1483,54 @@ test( "Insignificant white space returned for $(option).val() (#14858)", functio
 
 	val = jQuery( "<option>  test  </option>" ).val();
 	equal( val.length, 4, "insignificant white-space returned for value" );
+});
+
+test( "non-lowercase boolean attribute getters should not crash", function() {
+	expect( 3 );
+
+	var elem = jQuery( "<input checked required autofocus type='checkbox'>" );
+
+	jQuery.each({
+		checked: "Checked",
+		required: "requiRed",
+		autofocus: "AUTOFOCUS"
+	}, function( lowercased, original ) {
+		try {
+			strictEqual( elem.attr( original ), lowercased,
+				"The '" + this + "' attribute getter should return the lowercased name" );
+		} catch ( e ) {
+			ok( false, "The '" + this + "' attribute getter threw" );
+		}
+	});
+});
+
+test( "non-lowercase boolean attribute lookups should not recurse infinitely", function() {
+	expect( 6 );
+
+	var elem = jQuery( "<input checked required autofocus type='checkbox'>" )[ 0 ];
+
+	jQuery.each([ "Checked", "requiRed", "AUTOFOCUS" ], function( i, name ) {
+		var matched;
+
+		// jQuery.attr lowercases the name itself, but jQuery.find.attr (Sizzle.attr)
+		// hands the original, mixed-case name to the boolean attrHandle wrapper;
+		// keying the wrapper cache off that name leaves the wrapper reachable and
+		// the getter calls itself until the stack blows up
+		try {
+			strictEqual( jQuery.find.attr( elem, name ), name.toLowerCase(),
+				"jQuery.find.attr( elem, '" + name + "' ) returns the lowercased name" );
+		} catch ( e ) {
+			ok( false, "jQuery.find.attr( elem, '" + name + "' ) threw: " + e );
+		}
+
+		// The same getter is reached through the selector engine, e.g. from
+		// jQuery.find.matches, which never lowercases the attribute name
+		try {
+			matched = jQuery.find.matches( "[" + name + "]", [ elem ] );
+			ok( matched.length === 1 && matched[ 0 ] === elem,
+				"The '[" + name + "]' selector matches without recursing" );
+		} catch ( e ) {
+			ok( false, "The '[" + name + "]' selector threw: " + e );
+		}
+	});
 });
